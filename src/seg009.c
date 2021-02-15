@@ -21,6 +21,8 @@ The authors of this program may be contacted at https://forum.princed.org
 #include "common.h"
 #include <time.h>
 #include <errno.h>
+#include <sys/shm.h>
+#include <sys/ipc.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -28,6 +30,34 @@ The authors of this program may be contacted at https://forum.princed.org
 #else
 #include "dirent.h"
 #endif
+
+// Shared memory segment identifier for the framebuffer
+static int shared_memory_id = -1;
+static void *shared_memory_segment = NULL;
+
+//
+// Initialize shared framebuffer
+//
+void *I_InitSharedFramebuffer()
+{
+    const int screenwidth = 320, screenheight = 200;
+    ssize_t size = (3 * screenwidth * screenheight);
+    shared_memory_id = shmget(666, size, IPC_CREAT|0644);
+    if (shared_memory_id < 0)
+    {
+        fprintf(stderr, "Failed to allocate shared memory segment\n");
+        return NULL;
+    }
+
+    shared_memory_segment = shmat(shared_memory_id, NULL, 0);
+    if (shared_memory_segment == (void *) -1)
+    {
+        fprintf(stderr, "Failed to attach to shared memory segment\n");
+        return NULL;
+    }
+
+    return shared_memory_segment;
+}
 
 // Most functions in this file are different from those in the original game.
 
@@ -258,6 +288,12 @@ void __pascal far quit(int exit_code) {
 // seg009:0C90
 void __pascal far restore_stuff() {
 	SDL_Quit();
+
+	// Tear down shared framebuffer
+	shmdt(shared_memory_segment);
+	shmctl(shared_memory_id, IPC_RMID, NULL);
+	shared_memory_segment = NULL;
+	shared_memory_id = -1;
 }
 
 // seg009:0E33
@@ -2507,6 +2543,8 @@ void __pascal far set_gr_mode(byte grmode) {
 		sdlperror("set_gr_mode: SDL_CreateRGBSurface");
 		quit(1);
 	}
+	onscreen_surface_->pixels = I_InitSharedFramebuffer();
+
 	init_overlay();
 	init_scaling();
 	if (start_fullscreen) {
